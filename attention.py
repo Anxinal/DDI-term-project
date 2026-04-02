@@ -25,26 +25,52 @@ y_test_t  = torch.FloatTensor(y_test)
 train_dataset = TensorDataset(X_train_t, y_train_t)
 train_loader  = DataLoader(train_dataset, batch_size=256, shuffle=True)
 
-# 模型定义
-class MLP(nn.Module):
-    def __init__(self, input_dim=332):
+class MLPWithAttention(nn.Module):
+    def __init__(self, fp_dim=166, hidden_dim=128):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, 256),
+        self.fp_dim = fp_dim
+        
+        # 分别编码Drug A和Drug B
+        self.encoder = nn.Sequential(
+            nn.Linear(fp_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.3)
+        )
+        
+        # Attention层：Drug A attend to Drug B
+        self.attention = nn.Linear(hidden_dim, hidden_dim)
+        
+        # 最终分类层
+        self.classifier = nn.Sequential(
+            nn.Linear(hidden_dim * 2, 64),
             nn.ReLU(),
             nn.Dropout(0.3),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(128, 64),
-            nn.ReLU(),
             nn.Linear(64, 1),
             nn.Sigmoid()
         )
     
     def forward(self, x):
-        return self.net(x).squeeze()
-
+        # 拆分Drug A和Drug B的指纹
+        drug_a = x[:, :self.fp_dim]           # (batch, 166)
+        drug_b = x[:, self.fp_dim:]           # (batch, 166)
+        
+        # 各自编码
+        enc_a = self.encoder(drug_a)           # (batch, 128)
+        enc_b = self.encoder(drug_b)           # (batch, 128)
+        
+        # Attention: A attend to B
+        query = self.attention(enc_a)          # (batch, 128)
+        score = torch.sum(query * enc_b, dim=1, keepdim=True)  # (batch, 1)
+        weight = torch.sigmoid(score)          # attention weight
+        
+        # 用attention weight重新加权B的表示
+        attended_b = weight * enc_b            # (batch, 128)
+        
+        # 拼接A和加权后的B
+        combined = torch.cat([enc_a, attended_b], dim=1)  # (batch, 256)
+        
+        return self.classifier(combined).squeeze()
+    
 # 训练函数
 def train_model(model, train_loader, X_val, y_val, epochs=50):
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
@@ -72,7 +98,7 @@ def train_model(model, train_loader, X_val, y_val, epochs=50):
         
         if val_auc > best_val_auc:
             best_val_auc = val_auc
-            best_model_state = model.state_dict().copy()
+            best_model_state = {k: v.clone() for k, v in model.state_dict().items()}
         
         if (epoch + 1) % 10 == 0:
             print(f"Epoch {epoch+1}/{epochs} | Loss: {total_loss/len(train_loader):.4f} | Val AUC: {val_auc:.4f}")
@@ -82,15 +108,17 @@ def train_model(model, train_loader, X_val, y_val, epochs=50):
     print(f"\n最佳Val AUC: {best_val_auc:.4f}")
     return model
 
+
 # 跑起来
-mlp = MLP(input_dim=X_train.shape[1])
-mlp = train_model(mlp, train_loader, X_val_t, y_val_t, epochs=50)
+fp_dim = X_train.shape[1] // 2
+mlp_attn = MLPWithAttention(fp_dim=fp_dim)
+mlp_attn = train_model(mlp_attn, train_loader, X_val_t, y_val_t, epochs=50)
 
 # 评估
-mlp.eval()
+mlp_attn.eval()
 with torch.no_grad():
-    y_prob_mlp = mlp(X_test_t).numpy()
-    y_pred_mlp = (y_prob_mlp > 0.5).astype(int)
+    y_prob_attn = mlp_attn(X_test_t).numpy()
+    y_pred_attn = (y_prob_attn > 0.5).astype(int)
 
 def evaluate(y_true, y_pred, y_prob, model_name):
     print(f"\n{'='*40}")
@@ -101,18 +129,18 @@ def evaluate(y_true, y_pred, y_prob, model_name):
     print(f"Precision: {precision_score(y_true, y_pred):.4f}")
     print(f"Recall:    {recall_score(y_true, y_pred):.4f}")
 
-evaluate(y_test, y_pred_mlp, y_prob_mlp, "MLP")
+evaluate(y_test, y_pred_attn, y_prob_attn, "MLP + Attention")
 
 results = {}
-results["MLP"] = {
-    "AUC-ROC": roc_auc_score(y_test, y_prob_mlp),
-    "F1": f1_score(y_test, y_pred_mlp),
-    "Precision": precision_score(y_test, y_pred_mlp),
-    "Recall": recall_score(y_test, y_pred_mlp)
+results["Attention"] = {
+    "AUC-ROC": roc_auc_score(y_test, y_prob_attn),
+    "F1": f1_score(y_test, y_pred_attn),
+    "Precision": precision_score(y_test, y_pred_attn),
+    "Recall": recall_score(y_test, y_pred_attn)
 }
 
-torch.save(mlp.state_dict(), "mlp.pth")
+torch.save(mlp_attn.state_dict(), "mlp_attn.pth")
 
 import json
-with open("mlp_results.json", "w") as f:
+with open("attention_results.json", "w") as f:
     json.dump(results, f, indent=2)

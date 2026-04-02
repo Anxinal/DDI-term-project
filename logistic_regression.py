@@ -1,4 +1,5 @@
 import numpy as np
+import pickle
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score, classification_report
 
@@ -39,3 +40,6 @@ results["Logistic Regression"] = {
 import json
 with open("logistic_regression_results.json", "w") as f:
     json.dump(results, f, indent=2)
+
+with open("lr_model.pkl", "wb") as f:
+    pickle.dump(lr, f)

@@ -1,4 +1,5 @@
 import numpy as np
+import pickle
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score, classification_report
 
@@ -36,3 +37,6 @@ results["Random Forest"] = {
 import json
 with open("random_forest_results.json", "w") as f:
     json.dump(results, f, indent=2)
+
+with open("rf_model.pkl", "wb") as f:
+    pickle.dump(rf, f)
