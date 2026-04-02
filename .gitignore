@@ -1,3 +1,5 @@
 __pycache__/
 *.npz
 *.npy
+*.pkl
+*.pth
